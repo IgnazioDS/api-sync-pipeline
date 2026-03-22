@@ -1,0 +1,16 @@
+# Sync public GitHub repositories for a user to local SQLite
+name: github_repos
+base_url: https://api.github.com
+endpoint: /users/IgnazioDS/repos
+table: github_repos
+id_field: id
+cursor_field: pushed_at
+page_size: 30
+timeout: 15
+headers:
+  Accept: application/vnd.github+json
+  X-GitHub-Api-Version: "2022-11-28"
+params:
+  sort: updated
+  direction: desc
+  type: public

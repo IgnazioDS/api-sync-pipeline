@@ -1,0 +1,9 @@
+# Sync posts from JSONPlaceholder (public test API — no auth required)
+name: jsonplaceholder_posts
+base_url: https://jsonplaceholder.typicode.com
+endpoint: /posts
+table: posts
+id_field: id
+cursor_field: id
+page_size: 100
+timeout: 10
