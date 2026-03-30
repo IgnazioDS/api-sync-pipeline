@@ -7,3 +7,4 @@ id_field: id
 cursor_field: id
 page_size: 100
 timeout: 10
+pagination_mode: none

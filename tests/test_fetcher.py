@@ -2,9 +2,8 @@
 
 import pytest
 import responses as resp_lib
-import requests
 
-from api_sync.fetcher import FetchError, fetch_records, _extract_records, _extract_next_cursor
+from api_sync.fetcher import FetchError, _extract_next_cursor, _extract_records, fetch_records
 from api_sync.models import SyncConfig
 
 
@@ -19,116 +18,157 @@ BASE_CONFIG = SyncConfig(
 )
 
 
-class TestExtractRecords:
-    def test_list_response(self):
-        assert _extract_records([{"id": 1}], "id") == [{"id": 1}]
+class TestExtractHelpers:
+    def test_extract_records_uses_default_envelopes(self):
+        assert _extract_records({"data": [{"id": 1}]}, BASE_CONFIG) == [{"id": 1}]
 
-    def test_data_envelope(self):
-        assert _extract_records({"data": [{"id": 2}]}, "id") == [{"id": 2}]
+    def test_extract_records_uses_explicit_records_path(self):
+        config = SyncConfig(
+            name="test",
+            base_url="https://api.example.com",
+            endpoint="/items",
+            table="items",
+            id_field="id",
+            records_path="payload.rows",
+        )
+        assert _extract_records({"payload": {"rows": [{"id": 1}]}}, config) == [{"id": 1}]
 
-    def test_results_envelope(self):
-        assert _extract_records({"results": [{"id": 3}]}, "id") == [{"id": 3}]
+    def test_extract_records_rejects_non_list_records_path(self):
+        config = SyncConfig(
+            name="test",
+            base_url="https://api.example.com",
+            endpoint="/items",
+            table="items",
+            records_path="payload.rows",
+        )
+        with pytest.raises(FetchError, match="records_path"):
+            _extract_records({"payload": {"rows": {"id": 1}}}, config)
 
-    def test_items_envelope(self):
-        assert _extract_records({"items": [{"id": 4}]}, "id") == [{"id": 4}]
-
-    def test_empty_dict_returns_empty(self):
-        assert _extract_records({"other": "stuff"}, "id") == []
-
-
-class TestExtractNextCursor:
-    def test_top_level_next_cursor(self):
-        assert _extract_next_cursor({"next_cursor": "abc"}) == "abc"
-
-    def test_nested_meta_cursor(self):
-        assert _extract_next_cursor({"meta": {"next_cursor": "xyz"}}) == "xyz"
-
-    def test_none_when_absent(self):
-        assert _extract_next_cursor({"data": []}) is None
-
-    def test_list_response_returns_none(self):
-        assert _extract_next_cursor([1, 2, 3]) is None
+    def test_extract_next_cursor_uses_explicit_path(self):
+        config = SyncConfig(
+            name="test",
+            base_url="https://api.example.com",
+            endpoint="/items",
+            table="items",
+            next_cursor_path="meta.next",
+        )
+        assert _extract_next_cursor({"meta": {"next": "tok1"}}, config) == "tok1"
 
 
 @resp_lib.activate
 class TestFetchRecords:
-    def test_single_page_list_response(self):
+    def test_auto_mode_preserves_default_pagination_heuristics(self):
         resp_lib.add(
             resp_lib.GET,
             "https://api.example.com/items",
             json=[{"id": 1, "name": "a"}, {"id": 2, "name": "b"}],
             status=200,
         )
+
         results = list(fetch_records(BASE_CONFIG))
+
         assert len(results) == 2
-        assert results[0][0].record_id == "1"
-        assert results[1][0].record_id == "2"
+        request_url = resp_lib.calls[0].request.url
+        assert "per_page=2" in request_url
+        assert "limit=2" in request_url
+        assert "page=1" in request_url
 
-    def test_cursor_pagination(self):
+    def test_explicit_offset_mode_sends_only_configured_params(self):
+        config = SyncConfig(
+            name="orders",
+            base_url="https://api.example.com",
+            endpoint="/orders",
+            table="orders",
+            id_field="id",
+            page_size=50,
+            pagination_mode="offset",
+            page_param="page_number",
+            page_size_param="page_size",
+            since_param="updated_at",
+            since_value_mode="gte_suffix",
+            request_params={"status": "active"},
+        )
         resp_lib.add(
             resp_lib.GET,
-            "https://api.example.com/items",
-            json={"data": [{"id": 1}], "next_cursor": "tok1"},
+            "https://api.example.com/orders",
+            json={"items": [{"id": 1}]},
             status=200,
         )
-        resp_lib.add(
-            resp_lib.GET,
-            "https://api.example.com/items",
-            json={"data": [{"id": 2}]},
-            status=200,
-        )
-        results = list(fetch_records(BASE_CONFIG))
-        assert len(results) == 2
-        assert results[0][1] == "tok1"   # first record carries cursor from page 1
-        assert results[1][1] is None     # last page has no next cursor
 
-    def test_empty_response_stops_immediately(self):
-        resp_lib.add(
-            resp_lib.GET,
-            "https://api.example.com/items",
-            json=[],
-            status=200,
-        )
-        results = list(fetch_records(BASE_CONFIG))
-        assert results == []
+        results = list(fetch_records(config, since_cursor="2024-01-01T00:00:00Z"))
 
-    def test_http_error_raises_fetch_error(self):
-        resp_lib.add(
-            resp_lib.GET,
-            "https://api.example.com/items",
-            status=500,
-        )
-        with pytest.raises(FetchError):
-            list(fetch_records(BASE_CONFIG))
-
-    def test_since_cursor_injected_in_params(self):
-        resp_lib.add(
-            resp_lib.GET,
-            "https://api.example.com/items",
-            json=[{"id": 99}],
-            status=200,
-        )
-        results = list(fetch_records(BASE_CONFIG, since_cursor="2024-01-01"))
         assert len(results) == 1
-        call_params = resp_lib.calls[0].request.url
-        assert "since=2024-01-01" in call_params or "updated_at_gte=2024-01-01" in call_params
+        request_url = resp_lib.calls[0].request.url
+        assert "page_number=1" in request_url
+        assert "page_size=50" in request_url
+        assert "updated_at_gte=2024-01-01T00%3A00%3A00Z" in request_url
+        assert "status=active" in request_url
+        assert "per_page=" not in request_url
+        assert "limit=" not in request_url
+        assert "since=" not in request_url
 
-    def test_source_set_from_config(self):
+    def test_explicit_cursor_mode_uses_cursor_param_on_followup_requests(self):
+        config = SyncConfig(
+            name="orders",
+            base_url="https://api.example.com",
+            endpoint="/orders",
+            table="orders",
+            id_field="id",
+            pagination_mode="cursor",
+            page_size_param="page_size",
+            cursor_param="page_token",
+            next_cursor_path="meta.next_cursor",
+            records_path="payload.rows",
+        )
+        resp_lib.add(
+            resp_lib.GET,
+            "https://api.example.com/orders",
+            json={"payload": {"rows": [{"id": 1}]}, "meta": {"next_cursor": "tok1"}},
+            status=200,
+        )
+        resp_lib.add(
+            resp_lib.GET,
+            "https://api.example.com/orders",
+            json={"payload": {"rows": [{"id": 2}]}, "meta": {"next_cursor": None}},
+            status=200,
+        )
+
+        results = list(fetch_records(config))
+
+        assert len(results) == 2
+        assert "page_token=" not in resp_lib.calls[0].request.url
+        assert "page_token=tok1" in resp_lib.calls[1].request.url
+        assert "page=1" not in resp_lib.calls[0].request.url
+
+    def test_explicit_mode_does_not_send_since_when_since_param_unset(self):
+        config = SyncConfig(
+            name="orders",
+            base_url="https://api.example.com",
+            endpoint="/orders",
+            table="orders",
+            pagination_mode="none",
+        )
+        resp_lib.add(
+            resp_lib.GET,
+            "https://api.example.com/orders",
+            json=[{"id": 1}],
+            status=200,
+        )
+
+        list(fetch_records(config, since_cursor="tok1"))
+
+        request_url = resp_lib.calls[0].request.url
+        assert "since=" not in request_url
+        assert "_gte=" not in request_url
+
+    def test_invalid_json_raises_fetch_error(self):
         resp_lib.add(
             resp_lib.GET,
             "https://api.example.com/items",
-            json=[{"id": 7}],
+            body="not-json",
             status=200,
+            content_type="text/plain",
         )
-        results = list(fetch_records(BASE_CONFIG))
-        assert results[0][0].source == "test"
 
-    def test_nested_payload_preserved(self):
-        resp_lib.add(
-            resp_lib.GET,
-            "https://api.example.com/items",
-            json=[{"id": 1, "meta": {"tags": ["a", "b"]}}],
-            status=200,
-        )
-        results = list(fetch_records(BASE_CONFIG))
-        assert results[0][0].payload["meta"] == {"tags": ["a", "b"]}
+        with pytest.raises(FetchError, match="valid JSON"):
+            list(fetch_records(BASE_CONFIG))

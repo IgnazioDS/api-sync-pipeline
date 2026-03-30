@@ -1,0 +1,5 @@
+order_id | customer_name | status  | updated_at
+---------+---------------+---------+----------------------
+1003     | Acme Corp     | shipped | 2026-03-30T18:45:00Z
+1002     | Acme Corp     | packed  | 2026-03-30T17:10:00Z
+1001     | Acme Corp     | new     | 2026-03-30T16:00:00Z

@@ -43,6 +43,13 @@ def run_sync(
         for record, cursor in fetch_records(config, since_cursor=since):
             try:
                 transformed = transform(record)
+                if not isinstance(transformed, dict):
+                    raise TypeError("Transform functions must return a dict")
+                transformed = dict(transformed)
+                record_key = transformed.get(config.id_field)
+                if record_key in (None, ""):
+                    raise ValueError(f"Transformed record is missing '{config.id_field}'")
+                transformed[config.id_field] = str(record_key)
                 batch.append(transformed)
                 if cursor:
                     last_cursor = cursor
@@ -54,11 +61,11 @@ def run_sync(
             fetched += 1
 
             if len(batch) >= batch_size:
-                upserted += upsert_records(db_path, config.table, batch)
+                upserted += upsert_records(db_path, config.table, batch, id_field=config.id_field)
                 batch = []
 
         if batch:
-            upserted += upsert_records(db_path, config.table, batch)
+            upserted += upsert_records(db_path, config.table, batch, id_field=config.id_field)
 
     except FetchError as exc:
         logger.error("Fetch failed for '%s': %s", config.name, exc)

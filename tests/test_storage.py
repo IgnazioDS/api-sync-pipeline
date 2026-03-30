@@ -1,12 +1,15 @@
 """Tests for the SQLite storage layer."""
 
 import json
-import tempfile
 import os
+import sqlite3
+import tempfile
+from unittest.mock import patch
 
 import pytest
 
 from api_sync.storage import (
+    StorageError,
     get_sync_status,
     load_cursor,
     query_table,
@@ -34,8 +37,8 @@ class TestUpsertRecords:
         upsert_records(db, "users", [{"id": "1", "name": "Alice"}])
         upsert_records(db, "users", [{"id": "1", "name": "Bob"}])
         rows = query_table(db, "users")
-        names = [r["name"] for r in rows]
-        assert "Bob" in names
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Bob"
 
     def test_nested_dict_serialized_to_json(self, db):
         upsert_records(db, "items", [{"id": "1", "meta": {"x": 1}}])
@@ -56,9 +59,43 @@ class TestUpsertRecords:
         rows = query_table(db, "sparse", limit=10)
         assert len(rows) == 2
 
+    def test_new_columns_are_added_on_later_syncs(self, db):
+        upsert_records(db, "items", [{"id": "1", "name": "first"}])
+        upsert_records(db, "items", [{"id": "2", "name": "second", "status": "active"}])
+        rows = query_table(db, "items", limit=10)
+        assert rows[0]["status"] == "active"
+        assert rows[1]["status"] is None
+
+    def test_existing_non_unique_table_is_migrated_to_real_upserts(self, db):
+        conn = sqlite3.connect(db)
+        conn.execute('CREATE TABLE "legacy_users" (_row_id INTEGER PRIMARY KEY AUTOINCREMENT, "id" TEXT, "name" TEXT)')
+        conn.executemany(
+            'INSERT INTO "legacy_users" ("id", "name") VALUES (?, ?)',
+            [("1", "Alice"), ("1", "Bob")],
+        )
+        conn.commit()
+        conn.close()
+
+        upsert_records(db, "legacy_users", [{"id": "1", "name": "Carol"}])
+        rows = query_table(db, "legacy_users", limit=10)
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Carol"
+
     def test_query_nonexistent_table_returns_empty(self, db):
         rows = query_table(db, "nonexistent")
         assert rows == []
+
+    def test_query_operational_failure_is_surfaced(self, db):
+        class BrokenConnection:
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+            def close(self):
+                return None
+
+        with patch("api_sync.storage._connect", return_value=BrokenConnection()):
+            with pytest.raises(StorageError, match="database is locked"):
+                query_table(db, "users")
 
 
 class TestCursorManagement:

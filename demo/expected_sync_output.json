@@ -1,0 +1,8 @@
+{
+  "source": "customer_orders",
+  "fetched": 3,
+  "upserted": 3,
+  "errors": 0,
+  "cursor": "2026-03-30T18:45:00Z",
+  "success": true
+}

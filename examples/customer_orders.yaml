@@ -1,0 +1,20 @@
+# Customer-style example with explicit request contracts and env-backed auth
+name: customer_orders
+base_url: https://api.customer-example.com
+endpoint: /v1/orders
+table: customer_orders
+id_field: order_id
+cursor_field: updated_at
+page_size: 100
+timeout: 20
+pagination_mode: offset
+page_param: page
+page_size_param: page_size
+since_param: updated_at
+since_value_mode: gte_suffix
+records_path: data.orders
+request_headers:
+  Authorization: "Bearer ${CUSTOMER_API_TOKEN}"
+  X-Customer-Region: "${CUSTOMER_REGION}"
+request_params:
+  status: active

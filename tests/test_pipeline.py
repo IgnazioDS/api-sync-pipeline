@@ -85,6 +85,15 @@ class TestRunSync:
         assert result.errors == 2
         assert result.upserted == 0
 
+    def test_transform_missing_id_is_counted_as_error(self, db):
+        def missing_id_transform(record):
+            return {"val": record.payload["val"]}
+
+        with patch("api_sync.pipeline.fetch_records", return_value=_make_records(1, 2)):
+            result = run_sync(BASE, db, transform=missing_id_transform)
+        assert result.errors == 2
+        assert result.upserted == 0
+
     def test_incremental_sync_uses_saved_cursor(self, db):
         records_p1 = [(SyncRecord("api_a", "records", "1", {"id": "1"}), "tok1")]
         records_p2 = [(SyncRecord("api_a", "records", "2", {"id": "2"}), None)]
